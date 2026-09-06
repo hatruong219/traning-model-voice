@@ -1,0 +1,17 @@
+# Audio giọng, dataset, checkpoint — nặng và là dữ liệu cá nhân, không đẩy lên repo
+data/raw/
+data/vocals/
+data/dataset/
+data/checkpoints/
+*.wav
+*.mp3
+*.pt
+*.ckpt
+*.onnx
+
+# Giữ lại ghi chú
+!data/LICENSE-NOTES.md
+!data/zero-shot-notes.md
+
+__pycache__/
+*.pyc
