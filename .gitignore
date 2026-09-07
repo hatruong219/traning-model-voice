@@ -15,3 +15,7 @@ data/checkpoints/
 
 __pycache__/
 *.pyc
+
+# venv — mỗi máy tự tạo bằng ./run-on-gpu.sh setup
+.venv/
+venv/

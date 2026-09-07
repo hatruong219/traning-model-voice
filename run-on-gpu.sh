@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Chạy trên máy có GPU. Làm hết phần máy, DỪNG ở chỗ cần bạn nghe và quyết.
 #
-#   ./run-on-gpu.sh setup                      # cài môi trường
+#   ./run-on-gpu.sh setup                      # tạo .venv + cài môi trường
 #   ./run-on-gpu.sh extract ~/videos           # video -> audio -> tách giọng
 #   ./run-on-gpu.sh ref                        # cắt 30s mẫu sạch nhất
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
@@ -12,13 +12,39 @@ set -euo pipefail
 cd "$(dirname "$0")"
 CMD="${1:-help}"
 
+# Tự kích hoạt venv — khỏi phải source tay mỗi lần mở terminal.
+# Mọi lệnh python/pip bên dưới đi qua $PY và $PIP, không phụ thuộc PATH của shell.
+VENV="${VENV:-.venv}"
+if [ -x "$VENV/bin/python" ]; then
+    PY="$VENV/bin/python"; PIP="$VENV/bin/pip"
+    export VIRTUAL_ENV="$PWD/$VENV"
+    export PATH="$PWD/$VENV/bin:$PATH"
+else
+    PY="python3"; PIP="pip3"
+    # Cảnh báo mà vẫn chạy tiếp bằng python hệ thống thì vô nghĩa — DỪNG luôn.
+    # Trừ setup (nó tạo venv) và help (không cần python).
+    case "$CMD" in
+        setup|help|"") ;;
+        *) echo "(!) chưa có $VENV — chạy trước:  ./run-on-gpu.sh setup" >&2; exit 1 ;;
+    esac
+fi
+
 case "$CMD" in
 
 setup)
-  nvidia-smi --query-gpu=name,memory.total --format=csv
-  pip install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
-  pip install "audio-separator[gpu]" faster-whisper silero-vad soundfile
-  python3 -c "import torch; print('cuda:', torch.cuda.is_available())"
+  nvidia-smi --query-gpu=name,memory.total --format=csv || echo "(!) không thấy GPU"
+  if [ ! -x "$VENV/bin/python" ]; then
+      echo "tạo $VENV …"
+      python3 -m venv "$VENV" || {
+          echo "python3 -m venv lỗi — cài trước: sudo apt install -y python3-venv"; exit 1; }
+      PY="$VENV/bin/python"; PIP="$VENV/bin/pip"
+  fi
+  "$PIP" install -q --upgrade pip
+  "$PIP" install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
+  "$PIP" install "audio-separator[gpu]" faster-whisper silero-vad soundfile
+  "$PY" -c "import torch; print('torch', torch.__version__, '· cuda:', torch.cuda.is_available())"
+  echo
+  echo "Xong. Từ giờ chỉ cần ./run-on-gpu.sh <lệnh> — script tự dùng $VENV, không phải source."
   ;;
 
 extract)
@@ -50,13 +76,13 @@ ref)
   ;;
 
 coverage)
-  python3 scripts/check-phonetic-coverage.py \
+  "$PY" scripts/check-phonetic-coverage.py \
     "${2:-data/dataset/metadata.csv}" --min 5
   ;;
 
 dataset)
   mkdir -p data/dataset/wavs
-  python3 - <<'PY'
+  "$PY" - <<'PY'
 import glob, os, torch, soundfile as sf
 from faster_whisper import WhisperModel
 vad, utils = torch.hub.load('snakers4/silero-vad', 'silero_vad', trust_repo=True)
