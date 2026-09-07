@@ -130,7 +130,7 @@ ref)
   done
   [ -n "$F" ] || F="${ALL[0]}"
 
-  DUR=$("$PY" -c "import soundfile as sf,sys; print(sf.info(sys.argv[1]).duration)" "$F")
+  DUR=$(ffprobe -v error -show_entries format=duration -of csv=p=0 "$F")
   # F5-TTS TỰ CẮT audio mẫu về 12s. Cắt dài hơn thì ref_text (phiên âm cả đoạn dài)
   # không còn khớp audio đã bị cắt -> căn lệch -> output rỗng. Nên giữ 10s cho chắc.
   LEN="${LEN:-10}"
@@ -138,11 +138,12 @@ ref)
   echo "nguồn: $(basename "$F")  ($(printf '%.0f' "$DUR")s)"
   echo "cắt ${LEN}s từ mốc ${OFF}s   (đổi: OFF=90 LEN=10 ./run-on-gpu.sh ref)"
 
-  ffmpeg -y -loglevel error -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref.wav
+  ffmpeg -y -loglevel warning -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref.wav
   [ -s data/ref/ref.wav ] || { echo "(!) không cắt được — file dài $(printf '%.0f' "$DUR")s, mốc ${OFF}s"; exit 1; }
-  rm -f data/ref/ref.txt data/ref/ref.wav data/ref/ref.txt
-  OK=$("$PY" -c "import soundfile as sf; print(round(sf.info('data/ref/ref.wav').duration,1))")
-  echo "xong: data/ref/ref.wav  (${OK}s)"
+  rm -f data/ref/ref.txt data/ref/ref30.wav data/ref/ref30.txt   # transcript cũ + file tên cũ
+  OK=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav 2>/dev/null)
+  [ -n "$OK" ] || { echo "(!) file cắt ra không đọc được"; exit 1; }
+  echo "xong: data/ref/ref.wav  ($(printf '%.1f' "$OK")s)"
   echo "NGHE. Sạch, giọng đều, không nhạc. Rồi chạy: ./run-on-gpu.sh reftext"
   ;;
 
@@ -165,7 +166,7 @@ PYX
 
 zeroshot)
   [ -f data/ref/ref.txt ] || { echo "chưa có ref text — chạy ./run-on-gpu.sh reftext"; exit 1; }
-  D=$("$PY" -c "import soundfile as sf; print(sf.info('data/ref/ref.wav').duration)")
+  D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav)
   "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
       echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
       echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
@@ -190,7 +191,7 @@ narrate)
   [ -d "$SRC" ] || { echo "không thấy thư mục: $SRC"; exit 1; }
   [ -f data/ref/ref.wav ] && [ -f data/ref/ref.txt ] \
     || { echo "chưa có mẫu giọng — chạy ./run-on-gpu.sh ref rồi reftext"; exit 1; }
-  D=$("$PY" -c "import soundfile as sf; print(sf.info('data/ref/ref.wav').duration)")
+  D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav)
   "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
       echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
       echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
