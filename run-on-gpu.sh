@@ -6,6 +6,7 @@
 #   ./run-on-gpu.sh ref                        # cắt 30s mẫu sạch nhất
 #   ./run-on-gpu.sh reftext                    # Whisper phiên âm đoạn mẫu (khỏi gõ tay)
 #   ./run-on-gpu.sh zeroshot ["câu muốn thử"]  # clone giọng, KHÔNG train
+#   ./run-on-gpu.sh narrate <thư mục .txt> [thư mục ra]   # đọc cả chapter
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
 #   ./run-on-gpu.sh dataset                    # cắt câu + phiên âm -> metadata.csv
 #
@@ -181,6 +182,49 @@ zeroshot)
     --output_dir data/zeroshot
   echo
   echo "NGHE data/zeroshot/ — ra giọng bạn thì DỪNG, khỏi train."
+  ;;
+
+narrate)
+  # Đọc CẢ THƯ MỤC text bằng giọng đã clone. Tên file ra khớp tên file vào:
+  #   tts-lines/S01.txt -> audio/S01.wav
+  # Dùng cho dây chuyền manga-narration; giữ đúng giao diện của tts-edge.py.
+  SRC="${2:?đưa thư mục chứa các file .txt, vd ../manga-narration/.../tts-lines}"
+  OUT="${3:-${SRC%/*}/audio}"
+  [ -d "$SRC" ] || { echo "không thấy thư mục: $SRC"; exit 1; }
+  [ -f data/ref/ref30.wav ] && [ -f data/ref/ref30.txt ] \
+    || { echo "chưa có mẫu giọng — chạy ./run-on-gpu.sh ref rồi reftext"; exit 1; }
+  "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
+  mkdir -p "$OUT"
+
+  mapfile -d '' TXTS < <(find "$SRC" -maxdepth 1 -name '*.txt' -print0 | sort -z)
+  [ "${#TXTS[@]}" -gt 0 ] || { echo "không thấy file .txt nào trong $SRC"; exit 1; }
+  echo "${#TXTS[@]} đoạn → $OUT"
+
+  REFTXT="$(cat data/ref/ref30.txt)"
+  done_n=0; skip_n=0; fail_n=0
+  for t in "${TXTS[@]}"; do
+      b=$(basename "${t%.txt}")
+      # F5-TTS đặt tên output theo nội bộ, nên đọc vào thư mục tạm rồi đổi tên.
+      if [ -s "$OUT/$b.wav" ] && [ "${FORCE:-0}" != "1" ]; then skip_n=$((skip_n+1)); continue; fi
+      tmp=$(mktemp -d)
+      if "$VENV/bin/f5-tts_infer-cli" --ref_audio data/ref/ref30.wav \
+             --ref_text "$REFTXT" --gen_text "$(cat "$t")" \
+             --output_dir "$tmp" >/dev/null 2>&1; then
+          w=$(find "$tmp" -name '*.wav' | head -1)
+          if [ -s "$w" ]; then mv "$w" "$OUT/$b.wav"; done_n=$((done_n+1));
+          else echo "  $b: không ra file"; fail_n=$((fail_n+1)); fi
+      else
+          echo "  $b: f5-tts lỗi"; fail_n=$((fail_n+1))
+      fi
+      rm -rf "$tmp"
+      [ $((done_n % 10)) -eq 0 ] && [ "$done_n" -gt 0 ] && echo "  … $done_n đoạn"
+  done
+  echo
+  echo "đọc $done_n · có sẵn $skip_n · lỗi $fail_n → $OUT"
+  [ "$fail_n" -gt 0 ] && echo "(!) chạy lại để đọc tiếp phần lỗi; file đã có sẽ bỏ qua (FORCE=1 để đọc lại hết)"
+  echo "→ tiếp, ở máy có manga-narration:"
+  echo "   python3 scripts/build-video.py <results>"
+  echo "   python3 scripts/retime-from-audio.py <results>"
   ;;
 
 coverage)
