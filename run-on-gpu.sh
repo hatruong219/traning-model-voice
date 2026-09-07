@@ -49,20 +49,48 @@ setup)
 
 extract)
   SRC="${2:?đưa đường dẫn thư mục chứa video}"
+  [ -d "$SRC" ] || { echo "không thấy thư mục: $SRC"; exit 1; }
   mkdir -p data/raw data/vocals
-  for v in "$SRC"/*.{mp4,mkv,webm,mov}; do
-    [ -e "$v" ] || continue
-    b=$(basename "${v%.*}")
-    ffmpeg -y -i "$v" -vn -ac 1 -ar 24000 -c:a pcm_s16le "data/raw/$b.wav"
+
+  # find thay vì brace glob: bắt được cả đuôi HOA (.MP4) và nhiều định dạng hơn.
+  # Brace glob "$SRC"/*.{mp4,mkv} không nở khi không khớp -> truyền chuỗi nguyên vào ffmpeg.
+  mapfile -d '' VIDS < <(find "$SRC" -maxdepth 1 -type f \
+      \( -iname '*.mp4' -o -iname '*.mkv' -o -iname '*.webm' -o -iname '*.mov' \
+         -o -iname '*.ts'  -o -iname '*.avi' -o -iname '*.flv'  -o -iname '*.m4a' \
+         -o -iname '*.wav' -o -iname '*.mp3' \) -print0)
+
+  if [ "${#VIDS[@]}" -eq 0 ]; then
+      echo "Không thấy video/audio nào trong $SRC"
+      echo "Thư mục đang có:"
+      ls -la "$SRC" | head -20
+      echo
+      echo "Định dạng nhận: mp4 mkv webm mov ts avi flv m4a wav mp3 (không phân biệt hoa thường)"
+      exit 1
+  fi
+
+  echo "${#VIDS[@]} file nguồn → rút audio 24 kHz mono"
+  for v in "${VIDS[@]}"; do
+      b=$(basename "${v%.*}")
+      ffmpeg -y -loglevel error -i "$v" -vn -ac 1 -ar 24000 -c:a pcm_s16le "data/raw/$b.wav" \
+          && echo "  ok: $b.wav" || echo "  LỖI: $v"
   done
-  # tách giọng khỏi nhạc nền
-  for w in data/raw/*.wav; do
-    audio-separator "$w" --model_filename UVR-MDX-NET-Voc_FT.onnx \
-      --output_dir data/vocals --output_format WAV
-  done
+
+  # Kiểm THẬT là có file rồi mới tách — không để glob rỗng lọt vào separator.
+  mapfile -d '' RAWS < <(find data/raw -maxdepth 1 -name '*.wav' -print0)
+  if [ "${#RAWS[@]}" -eq 0 ]; then
+      echo "ffmpeg không tạo được file nào trong data/raw/ — xem lỗi ở trên"; exit 1
+  fi
+
   echo
-  echo "NGHE THỬ 3 file trong data/vocals/ — còn nghe thấy nhạc hoặc tiếng rít thì"
-  echo "đổi model: Kim_Vocal_2.onnx hoặc htdemucs, rồi chạy lại."
+  echo "${#RAWS[@]} file → tách giọng khỏi nhạc nền"
+  for w in "${RAWS[@]}"; do
+      audio-separator "$w" --model_filename UVR-MDX-NET-Voc_FT.onnx \
+        --output_dir data/vocals --output_format WAV
+  done
+
+  echo
+  echo "NGHE THỬ 3 file trong data/vocals/ — còn nhạc hoặc tiếng rít thì đổi model:"
+  echo "  sửa UVR-MDX-NET-Voc_FT.onnx thành Kim_Vocal_2.onnx trong script, chạy lại."
   ;;
 
 ref)
