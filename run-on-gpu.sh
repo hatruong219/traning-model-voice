@@ -7,6 +7,7 @@
 #   ./run-on-gpu.sh reftext                    # Whisper phiên âm đoạn mẫu (khỏi gõ tay)
 #   ./run-on-gpu.sh zeroshot ["câu muốn thử"]  # clone giọng, KHÔNG train
 #   ./run-on-gpu.sh narrate <thư mục .txt> [thư mục ra]   # đọc cả chapter
+#   ./run-on-gpu.sh diag                       # đo mức âm mẫu + output
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
 #   ./run-on-gpu.sh dataset                    # cắt câu + phiên âm -> metadata.csv
 #
@@ -138,7 +139,9 @@ ref)
   echo "nguồn: $(basename "$F")  ($(printf '%.0f' "$DUR")s)"
   echo "cắt ${LEN}s từ mốc ${OFF}s   (đổi: OFF=90 LEN=10 ./run-on-gpu.sh ref)"
 
-  ffmpeg -y -loglevel warning -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref.wav
+  # loudnorm: mẫu quá nhỏ tiếng thì F5-TTS ra output im lặng. Chuẩn về -16 LUFS.
+  ffmpeg -y -loglevel warning -ss "$OFF" -t "$LEN" -i "$F" \
+      -af "loudnorm=I=-16:TP=-1.5:LRA=11" -ar 24000 -ac 1 data/ref/ref.wav
   [ -s data/ref/ref.wav ] || { echo "(!) không cắt được — file dài $(printf '%.0f' "$DUR")s, mốc ${OFF}s"; exit 1; }
   rm -f data/ref/ref.txt data/ref/ref30.wav data/ref/ref30.txt   # transcript cũ + file tên cũ
   OK=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav 2>/dev/null)
@@ -228,6 +231,20 @@ narrate)
   echo "→ tiếp, ở máy có manga-narration:"
   echo "   python3 scripts/build-video.py <results>"
   echo "   python3 scripts/retime-from-audio.py <results>"
+  ;;
+
+diag)
+  # Đo mức âm. Output im lặng gần như luôn do mẫu quá nhỏ tiếng hoặc rỗng.
+  for f in data/ref/ref.wav data/zeroshot/infer_cli_basic.wav; do
+      [ -f "$f" ] || { echo "$f — chưa có"; continue; }
+      echo "── $f"
+      ffprobe -v error -show_entries stream=sample_rate,channels,duration \
+              -of default=noprint_wrappers=1 "$f" | sed 's/^/   /'
+      ffmpeg -hide_banner -i "$f" -af "volumedetect" -f null - 2>&1 \
+          | grep -E 'mean_volume|max_volume' | sed 's/^\[[^]]*\] /   /'
+      echo
+  done
+  echo "Đọc: max_volume gần 0 dB là bình thường. Dưới -40 dB là gần như im lặng."
   ;;
 
 coverage)
