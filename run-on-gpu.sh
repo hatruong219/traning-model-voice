@@ -4,6 +4,8 @@
 #   ./run-on-gpu.sh setup                      # tạo .venv + cài môi trường
 #   ./run-on-gpu.sh extract ~/videos           # video -> audio -> tách giọng
 #   ./run-on-gpu.sh ref                        # cắt 30s mẫu sạch nhất
+#   ./run-on-gpu.sh reftext                    # Whisper phiên âm đoạn mẫu (khỏi gõ tay)
+#   ./run-on-gpu.sh zeroshot ["câu muốn thử"]  # clone giọng, KHÔNG train
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
 #   ./run-on-gpu.sh dataset                    # cắt câu + phiên âm -> metadata.csv
 #
@@ -121,6 +123,36 @@ ref)
   ffmpeg -y -i "$F" -ss 30 -t 30 -ar 24000 -ac 1 data/ref/ref30.wav
   echo "mẫu: data/ref/ref30.wav — NGHE. Phải sạch, giọng đều, không nhạc, không ngắt câu giữa."
   echo "Không đạt thì đổi -ss 30 thành mốc khác rồi chạy lại."
+  ;;
+
+reftext)
+  # Zero-shot cần biết đoạn mẫu NÓI GÌ để căn âm với chữ. Không phải gõ tay —
+  # Whisper đã có trong venv, để nó phiên âm rồi lưu ra file.
+  [ -f data/ref/ref30.wav ] || { echo "chưa có data/ref/ref30.wav — chạy ./run-on-gpu.sh ref"; exit 1; }
+  "$PY" - <<'PYX'
+from faster_whisper import WhisperModel
+import torch
+dev = "cuda" if torch.cuda.is_available() else "cpu"
+m = WhisperModel("large-v3", device=dev, compute_type="float16" if dev=="cuda" else "int8")
+txt = " ".join(s.text.strip() for s in m.transcribe("data/ref/ref30.wav", language="vi")[0]).strip()
+open("data/ref/ref30.txt", "w", encoding="utf-8").write(txt + "\n")
+print(txt)
+PYX
+  echo
+  echo "Lưu ở data/ref/ref30.txt — ĐỌC LẠI, sai chữ nào thì sửa file đó rồi chạy zeroshot."
+  ;;
+
+zeroshot)
+  [ -f data/ref/ref30.txt ] || { echo "chưa có ref text — chạy ./run-on-gpu.sh reftext"; exit 1; }
+  GEN="${2:-Lửa kín cả khung hình, không thấy trời cũng không thấy đất.}"
+  "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
+  "$VENV/bin/f5-tts_infer-cli" \
+    --ref_audio data/ref/ref30.wav \
+    --ref_text "$(cat data/ref/ref30.txt)" \
+    --gen_text "$GEN" \
+    --output_dir data/zeroshot
+  echo
+  echo "NGHE data/zeroshot/ — ra giọng bạn thì DỪNG, khỏi train."
   ;;
 
 coverage)
