@@ -7,6 +7,7 @@
 #   ./run-on-gpu.sh reftext                    # Whisper phiên âm đoạn mẫu (khỏi gõ tay)
 #   ./run-on-gpu.sh zeroshot ["câu muốn thử"]  # clone giọng, KHÔNG train
 #   ./run-on-gpu.sh narrate <thư mục .txt> [thư mục ra]   # đọc cả chapter
+#   ./run-on-gpu.sh getmodel [repo]            # tải checkpoint tiếng Việt
 #   ./run-on-gpu.sh diag                       # đo mức âm mẫu + output
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
 #   ./run-on-gpu.sh dataset                    # cắt câu + phiên âm -> metadata.csv
@@ -201,6 +202,36 @@ narrate)
   echo "→ gửi $OUT về máy WSL, rồi:"
   echo "   python3 scripts/retime-from-audio.py <results>"
   echo "   python3 scripts/build-video.py <results>"
+  ;;
+
+getmodel)
+  # Tải checkpoint tiếng Việt. F5TTS_v1_Base mặc định là tiếng Anh/Trung — chạy text
+  # tiếng Việt qua nó ra âm thanh vô nghĩa (chữ có dấu không có trong vocab).
+  REPO="${2:-hynt/F5-TTS-Vietnamese-ViVoice}"
+  "$PIP" show huggingface_hub >/dev/null 2>&1 || "$PIP" install -q huggingface_hub
+  mkdir -p models
+  "$PY" - "$REPO" <<'PYX'
+import sys
+from huggingface_hub import list_repo_files, hf_hub_download
+repo = sys.argv[1]
+files = list_repo_files(repo)
+want = [f for f in files if f.endswith(('.pt', '.pth', '.safetensors')) or f == 'vocab.txt']
+if not want:
+    sys.exit(f"không thấy checkpoint/vocab trong {repo}. File có: {files[:20]}")
+for f in want:
+    p = hf_hub_download(repo, f, local_dir="models")
+    print(f"  {f}")
+PYX
+  echo
+  echo "Đặt biến rồi chạy:"
+  CK=$(find models -name '*.pt' -o -name '*.pth' -o -name '*.safetensors' | head -1)
+  VC=$(find models -name 'vocab.txt' | head -1)
+  echo "  export CKPT=$PWD/$CK"
+  echo "  export VOCAB=$PWD/$VC"
+  echo "  DEVICE=cpu ./run-on-gpu.sh zeroshot"
+  echo
+  echo "LICENSE: checkpoint tiếng Việt của F5-TTS đều PHI THƯƠNG MẠI (kế thừa CC-BY-NC"
+  echo "của bộ Emilia mà F5TTS_Base train trên đó). Kênh có doanh thu thì xem lại."
   ;;
 
 diag)
