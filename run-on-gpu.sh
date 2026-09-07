@@ -8,6 +8,7 @@
 #   ./run-on-gpu.sh zeroshot ["câu muốn thử"]  # clone giọng, KHÔNG train
 #   ./run-on-gpu.sh narrate <thư mục .txt> [thư mục ra]   # đọc cả chapter
 #   ./run-on-gpu.sh getmodel [repo]            # tải checkpoint tiếng Việt
+#   ./run-on-gpu.sh piper [thư mục .txt]       # giọng Việt CC-BY-4.0, CPU, license sạch
 #   ./run-on-gpu.sh diag                       # đo mức âm mẫu + output
 #   ./run-on-gpu.sh coverage                   # đo phủ âm (chạy được cả trên CPU)
 #   ./run-on-gpu.sh dataset                    # cắt câu + phiên âm -> metadata.csv
@@ -232,6 +233,19 @@ PYX
   echo
   echo "LICENSE: checkpoint tiếng Việt của F5-TTS đều PHI THƯƠNG MẠI (kế thừa CC-BY-NC"
   echo "của bộ Emilia mà F5TTS_Base train trên đó). Kênh có doanh thu thì xem lại."
+  ;;
+
+piper)
+  # Piper: giọng Việt CC-BY-4.0, chạy CPU, nhanh hơn realtime. Không clone giọng bạn
+  # nhưng license sạch — dùng được cho kênh có doanh thu, khác cả họ F5-TTS tiếng Việt.
+  "$PIP" show piper-tts >/dev/null 2>&1 || "$PIP" install -q piper-tts
+  if [ -n "${2:-}" ]; then
+      "$PY" scripts/tts-piper.py --in-dir "$2" --out-dir "${3:-${2%/*}/audio}" ${FORCE:+--force}
+  else
+      "$PY" scripts/tts-piper.py --text "Lửa kín cả khung hình, không thấy trời cũng không thấy đất." \
+          --out data/piper-test.wav
+      echo "NGHE data/piper-test.wav"
+  fi
   ;;
 
 diag)
