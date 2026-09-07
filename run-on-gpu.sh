@@ -42,7 +42,27 @@ setup)
   "$PIP" install -q --upgrade pip
   "$PIP" install torch torchaudio --index-url https://download.pytorch.org/whl/cu124
   "$PIP" install "audio-separator[gpu]" faster-whisper silero-vad soundfile
+
+  # onnxruntime và onnxruntime-gpu cài vào CÙNG thư mục onnxruntime/ — sống chung thì
+  # bản CPU thắng và GPU không được dùng. Uninstall một cái cũng xoá file dùng chung,
+  # để lại package hỏng ("no attribute get_available_providers"). Nên dọn sạch rồi cài lại.
+  if "$PY" -c "import onnxruntime" 2>/dev/null; then
+      if ! "$PY" -c "import onnxruntime as o; assert 'CUDAExecutionProvider' in o.get_available_providers()" 2>/dev/null; then
+          echo "dọn onnxruntime để bật GPU …"
+          "$PIP" uninstall -y onnxruntime onnxruntime-gpu >/dev/null 2>&1 || true
+          rm -rf "$VENV"/lib/python*/site-packages/onnxruntime*
+          "$PIP" install -q onnxruntime-gpu
+      fi
+  fi
+
   "$PY" -c "import torch; print('torch', torch.__version__, '· cuda:', torch.cuda.is_available())"
+  "$PY" -c "import onnxruntime as o; p=o.get_available_providers(); print('onnxruntime', o.__version__, p); \
+import sys; sys.exit(0 if 'CUDAExecutionProvider' in p else 1)" || {
+      echo
+      echo "(!) onnxruntime chưa thấy CUDAExecutionProvider — tách giọng sẽ chạy CPU (chậm)."
+      echo "    Thường do thiếu cuDNN. Thử:  $PIP install nvidia-cudnn-cu12"
+      echo "    Vẫn không được thì chạy tiếp cũng OK, chỉ chậm hơn."
+  }
   echo
   echo "Xong. Từ giờ chỉ cần ./run-on-gpu.sh <lệnh> — script tự dùng $VENV, không phải source."
   ;;
