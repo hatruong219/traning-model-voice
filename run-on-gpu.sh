@@ -118,12 +118,10 @@ extract)
 
 ref)
   mkdir -p data/ref
-  # Lấy MỌI wav trong data/vocals, ưu tiên file có "vocal" trong tên (tên do
-  # audio-separator đặt, không đoán cứng pattern nữa).
   mapfile -d '' ALL < <(find data/vocals -maxdepth 1 -name '*.wav' -print0 2>/dev/null)
   if [ "${#ALL[@]}" -eq 0 ]; then
       echo "data/vocals/ rỗng — chạy ./run-on-gpu.sh extract <thư mục video> trước."
-      echo "Đang có:"; ls -la data/vocals 2>/dev/null || echo "  (thư mục chưa tồn tại)"
+      ls -la data/vocals 2>/dev/null || echo "  (thư mục chưa tồn tại)"
       exit 1
   fi
   F=""
@@ -132,52 +130,51 @@ ref)
   done
   [ -n "$F" ] || F="${ALL[0]}"
 
-  DUR=$("$PY" -c "import soundfile as sf,sys; print(sf.info(sys.argv[1]).duration)" "$F" 2>/dev/null \
-        || ffprobe -v error -show_entries format=duration -of csv=p=0 "$F")
+  DUR=$("$PY" -c "import soundfile as sf,sys; print(sf.info(sys.argv[1]).duration)" "$F")
+  # F5-TTS TỰ CẮT audio mẫu về 12s. Cắt dài hơn thì ref_text (phiên âm cả đoạn dài)
+  # không còn khớp audio đã bị cắt -> căn lệch -> output rỗng. Nên giữ 10s cho chắc.
+  LEN="${LEN:-10}"
+  OFF="${OFF:-$("$PY" -c "d=float('$DUR'); print(round(min(d*0.25, max(0, d-float('$LEN'))),2))")}"
   echo "nguồn: $(basename "$F")  ($(printf '%.0f' "$DUR")s)"
+  echo "cắt ${LEN}s từ mốc ${OFF}s   (đổi: OFF=90 LEN=10 ./run-on-gpu.sh ref)"
 
-  # Cắt 30s bắt đầu ở 25% file. Hardcode -ss 30 sẽ ra RỖNG nếu file ngắn hơn 30s.
-  LEN=$("$PY" -c "d=float('$DUR'); print(30 if d>=40 else max(5, d*0.8))")
-  OFF="${OFF:-$("$PY" -c "d=float('$DUR'); l=float('$LEN'); print(round(min(d*0.25, max(0, d-l)),2))")}"
-  echo "cắt ${LEN}s từ mốc ${OFF}s   (đổi mốc: OFF=90 ./run-on-gpu.sh ref)"
-
-  ffmpeg -y -loglevel error -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref30.wav
-
-  # ffmpeg có thể exit 0 mà không ghi gì (seek quá cuối file) — phải kiểm file thật.
-  if [ ! -s data/ref/ref30.wav ]; then
-      echo "(!) không cắt được. File nguồn dài $(printf '%.0f' "$DUR")s, mốc yêu cầu ${OFF}s."
-      exit 1
-  fi
-  OK=$("$PY" -c "import soundfile as sf; print(round(sf.info('data/ref/ref30.wav').duration,1))")
-  echo "xong: data/ref/ref30.wav  (${OK}s)"
-  echo "NGHE. Phải sạch, giọng đều, không nhạc, không cắt giữa câu."
-  echo "Không đạt thì đổi mốc:  OFF=120 ./run-on-gpu.sh ref"
+  ffmpeg -y -loglevel error -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref.wav
+  [ -s data/ref/ref.wav ] || { echo "(!) không cắt được — file dài $(printf '%.0f' "$DUR")s, mốc ${OFF}s"; exit 1; }
+  rm -f data/ref/ref.txt data/ref/ref.wav data/ref/ref.txt
+  OK=$("$PY" -c "import soundfile as sf; print(round(sf.info('data/ref/ref.wav').duration,1))")
+  echo "xong: data/ref/ref.wav  (${OK}s)"
+  echo "NGHE. Sạch, giọng đều, không nhạc. Rồi chạy: ./run-on-gpu.sh reftext"
   ;;
 
 reftext)
   # Zero-shot cần biết đoạn mẫu NÓI GÌ để căn âm với chữ. Không phải gõ tay —
   # Whisper đã có trong venv, để nó phiên âm rồi lưu ra file.
-  [ -f data/ref/ref30.wav ] || { echo "chưa có data/ref/ref30.wav — chạy ./run-on-gpu.sh ref"; exit 1; }
+  [ -f data/ref/ref.wav ] || { echo "chưa có data/ref/ref.wav — chạy ./run-on-gpu.sh ref"; exit 1; }
   "$PY" - <<'PYX'
 from faster_whisper import WhisperModel
 import torch
 dev = "cuda" if torch.cuda.is_available() else "cpu"
 m = WhisperModel("large-v3", device=dev, compute_type="float16" if dev=="cuda" else "int8")
-txt = " ".join(s.text.strip() for s in m.transcribe("data/ref/ref30.wav", language="vi")[0]).strip()
-open("data/ref/ref30.txt", "w", encoding="utf-8").write(txt + "\n")
+txt = " ".join(s.text.strip() for s in m.transcribe("data/ref/ref.wav", language="vi")[0]).strip()
+open("data/ref/ref.txt", "w", encoding="utf-8").write(txt + "\n")
 print(txt)
 PYX
   echo
-  echo "Lưu ở data/ref/ref30.txt — ĐỌC LẠI, sai chữ nào thì sửa file đó rồi chạy zeroshot."
+  echo "Lưu ở data/ref/ref.txt — ĐỌC LẠI, sai chữ nào thì sửa file đó rồi chạy zeroshot."
   ;;
 
 zeroshot)
-  [ -f data/ref/ref30.txt ] || { echo "chưa có ref text — chạy ./run-on-gpu.sh reftext"; exit 1; }
+  [ -f data/ref/ref.txt ] || { echo "chưa có ref text — chạy ./run-on-gpu.sh reftext"; exit 1; }
+  D=$("$PY" -c "import soundfile as sf; print(sf.info('data/ref/ref.wav').duration)")
+  "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
+      echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
+      echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
+      exit 1; }
   GEN="${2:-Lửa kín cả khung hình, không thấy trời cũng không thấy đất.}"
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
   "$VENV/bin/f5-tts_infer-cli" \
-    --ref_audio data/ref/ref30.wav \
-    --ref_text "$(cat data/ref/ref30.txt)" \
+    --ref_audio data/ref/ref.wav \
+    --ref_text "$(cat data/ref/ref.txt)" \
     --gen_text "$GEN" \
     --output_dir data/zeroshot
   echo
@@ -191,8 +188,13 @@ narrate)
   SRC="${2:?đưa thư mục chứa các file .txt, vd ../manga-narration/.../tts-lines}"
   OUT="${3:-${SRC%/*}/audio}"
   [ -d "$SRC" ] || { echo "không thấy thư mục: $SRC"; exit 1; }
-  [ -f data/ref/ref30.wav ] && [ -f data/ref/ref30.txt ] \
+  [ -f data/ref/ref.wav ] && [ -f data/ref/ref.txt ] \
     || { echo "chưa có mẫu giọng — chạy ./run-on-gpu.sh ref rồi reftext"; exit 1; }
+  D=$("$PY" -c "import soundfile as sf; print(sf.info('data/ref/ref.wav').duration)")
+  "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
+      echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
+      echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
+      exit 1; }
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
   mkdir -p "$OUT"
 
@@ -200,14 +202,14 @@ narrate)
   [ "${#TXTS[@]}" -gt 0 ] || { echo "không thấy file .txt nào trong $SRC"; exit 1; }
   echo "${#TXTS[@]} đoạn → $OUT"
 
-  REFTXT="$(cat data/ref/ref30.txt)"
+  REFTXT="$(cat data/ref/ref.txt)"
   done_n=0; skip_n=0; fail_n=0
   for t in "${TXTS[@]}"; do
       b=$(basename "${t%.txt}")
       # F5-TTS đặt tên output theo nội bộ, nên đọc vào thư mục tạm rồi đổi tên.
       if [ -s "$OUT/$b.wav" ] && [ "${FORCE:-0}" != "1" ]; then skip_n=$((skip_n+1)); continue; fi
       tmp=$(mktemp -d)
-      if "$VENV/bin/f5-tts_infer-cli" --ref_audio data/ref/ref30.wav \
+      if "$VENV/bin/f5-tts_infer-cli" --ref_audio data/ref/ref.wav \
              --ref_text "$REFTXT" --gen_text "$(cat "$t")" \
              --output_dir "$tmp" >/dev/null 2>&1; then
           w=$(find "$tmp" -name '*.wav' | head -1)
