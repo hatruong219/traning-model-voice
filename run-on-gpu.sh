@@ -116,13 +116,41 @@ extract)
   ;;
 
 ref)
-  # lấy 30 giây liên tục có năng lượng đều nhất làm mẫu zero-shot
   mkdir -p data/ref
-  F=$(ls data/vocals/*Vocals*.wav data/vocals/*vocals*.wav 2>/dev/null | head -1)
-  [ -n "$F" ] || { echo "chưa có file giọng trong data/vocals/ — chạy extract trước"; exit 1; }
-  ffmpeg -y -i "$F" -ss 30 -t 30 -ar 24000 -ac 1 data/ref/ref30.wav
-  echo "mẫu: data/ref/ref30.wav — NGHE. Phải sạch, giọng đều, không nhạc, không ngắt câu giữa."
-  echo "Không đạt thì đổi -ss 30 thành mốc khác rồi chạy lại."
+  # Lấy MỌI wav trong data/vocals, ưu tiên file có "vocal" trong tên (tên do
+  # audio-separator đặt, không đoán cứng pattern nữa).
+  mapfile -d '' ALL < <(find data/vocals -maxdepth 1 -name '*.wav' -print0 2>/dev/null)
+  if [ "${#ALL[@]}" -eq 0 ]; then
+      echo "data/vocals/ rỗng — chạy ./run-on-gpu.sh extract <thư mục video> trước."
+      echo "Đang có:"; ls -la data/vocals 2>/dev/null || echo "  (thư mục chưa tồn tại)"
+      exit 1
+  fi
+  F=""
+  for f in "${ALL[@]}"; do
+      case "${f,,}" in *vocal*) F="$f"; break ;; esac
+  done
+  [ -n "$F" ] || F="${ALL[0]}"
+
+  DUR=$("$PY" -c "import soundfile as sf,sys; print(sf.info(sys.argv[1]).duration)" "$F" 2>/dev/null \
+        || ffprobe -v error -show_entries format=duration -of csv=p=0 "$F")
+  echo "nguồn: $(basename "$F")  ($(printf '%.0f' "$DUR")s)"
+
+  # Cắt 30s bắt đầu ở 25% file. Hardcode -ss 30 sẽ ra RỖNG nếu file ngắn hơn 30s.
+  LEN=$("$PY" -c "d=float('$DUR'); print(30 if d>=40 else max(5, d*0.8))")
+  OFF="${OFF:-$("$PY" -c "d=float('$DUR'); l=float('$LEN'); print(round(min(d*0.25, max(0, d-l)),2))")}"
+  echo "cắt ${LEN}s từ mốc ${OFF}s   (đổi mốc: OFF=90 ./run-on-gpu.sh ref)"
+
+  ffmpeg -y -loglevel error -ss "$OFF" -t "$LEN" -i "$F" -ar 24000 -ac 1 data/ref/ref30.wav
+
+  # ffmpeg có thể exit 0 mà không ghi gì (seek quá cuối file) — phải kiểm file thật.
+  if [ ! -s data/ref/ref30.wav ]; then
+      echo "(!) không cắt được. File nguồn dài $(printf '%.0f' "$DUR")s, mốc yêu cầu ${OFF}s."
+      exit 1
+  fi
+  OK=$("$PY" -c "import soundfile as sf; print(round(sf.info('data/ref/ref30.wav').duration,1))")
+  echo "xong: data/ref/ref30.wav  (${OK}s)"
+  echo "NGHE. Phải sạch, giọng đều, không nhạc, không cắt giữa câu."
+  echo "Không đạt thì đổi mốc:  OFF=120 ./run-on-gpu.sh ref"
   ;;
 
 reftext)
