@@ -176,12 +176,30 @@ zeroshot)
       exit 1; }
   GEN="${2:-Lửa kín cả khung hình, không thấy trời cũng không thấy đất.}"
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
-  "$VENV/bin/f5-tts_infer-cli" \
-    --ref_audio data/ref/ref.wav \
-    --ref_text "$(cat data/ref/ref.txt)" \
-    --gen_text "$GEN" \
-    --output_dir data/zeroshot
-  echo
+  ARGS=(--ref_audio data/ref/ref.wav --ref_text "$(cat data/ref/ref.txt)"
+        --gen_text "$GEN" --output_dir data/zeroshot)
+  [ -n "${DEVICE:-}" ] && ARGS+=(--device "$DEVICE")
+  "$VENV/bin/f5-tts_infer-cli" "${ARGS[@]}"
+
+  # Output NaN/Inf được ghi ra thành hằng số full-scale: mean == max == 0.0 dB.
+  # File "đầy" nhưng không dao động nên KHÔNG có tiếng. Phát hiện luôn, đừng để
+  # người dùng tự nghe rồi đoán.
+  W=data/zeroshot/infer_cli_basic.wav
+  if [ -f "$W" ]; then
+      MEAN=$(ffmpeg -hide_banner -i "$W" -af volumedetect -f null - 2>&1 \
+             | grep -oP 'mean_volume: \K[-0-9.]+' | head -1)
+      MAX=$(ffmpeg -hide_banner -i "$W" -af volumedetect -f null - 2>&1 \
+             | grep -oP 'max_volume: \K[-0-9.]+' | head -1)
+      echo
+      echo "output: mean ${MEAN} dB · max ${MAX} dB"
+      if [ "$MEAN" = "0.0" ] && [ "$MAX" = "0.0" ]; then
+          echo
+          echo "(!) OUTPUT HỎNG — waveform là hằng số bão hoà, không có tiếng."
+          echo "    Model trả về NaN/Inf. Gần như luôn do bất ổn số học fp16 trên GPU."
+          echo "    Thử CPU để khoanh vùng:  DEVICE=cpu ./run-on-gpu.sh zeroshot"
+          exit 1
+      fi
+  fi
   echo "NGHE data/zeroshot/ — ra giọng bạn thì DỪNG, khỏi train."
   ;;
 
