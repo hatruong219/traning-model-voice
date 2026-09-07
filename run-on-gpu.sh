@@ -181,6 +181,7 @@ zeroshot)
   # cần fp32 (fp16 -> NaN -> waveform hằng số, file đầy nhưng không có tiếng).
   "$PY" scripts/tts-f5.py --ref data/ref/ref.wav --ref-text-file data/ref/ref.txt \
       --text "$GEN" --out data/zeroshot/test.wav ${DEVICE:+--device "$DEVICE"} \
+      ${CKPT:+--ckpt "$CKPT"} ${VOCAB:+--vocab "$VOCAB"} \
     && { echo; echo "NGHE data/zeroshot/test.wav — ra giọng bạn thì DỪNG, khỏi train."; } \
     || { echo; echo "(!) chưa ra tiếng. Thử CPU:  DEVICE=cpu ./run-on-gpu.sh zeroshot"; exit 1; }
   ;;
@@ -194,7 +195,8 @@ narrate)
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
 
   "$PY" scripts/tts-f5.py --ref data/ref/ref.wav --ref-text-file data/ref/ref.txt \
-      --in-dir "$SRC" --out-dir "$OUT" ${DEVICE:+--device "$DEVICE"} ${FORCE:+--force}
+      --in-dir "$SRC" --out-dir "$OUT" ${DEVICE:+--device "$DEVICE"} ${FORCE:+--force} \
+      ${CKPT:+--ckpt "$CKPT"} ${VOCAB:+--vocab "$VOCAB"}
   echo
   echo "→ gửi $OUT về máy WSL, rồi:"
   echo "   python3 scripts/retime-from-audio.py <results>"

@@ -19,12 +19,44 @@ import numpy as np
 import torch
 
 
-def build_tts(device: str):
+VI_CHARS = "ăâđêôơưáàảãạếềệốồộớờợứừựíìỉĩị"
+
+
+def check_vocab(vocab: Path) -> None:
+    """Vocab không có ký tự tiếng Việt thì model KHÔNG THỂ đọc tiếng Việt.
+
+    F5TTS_v1_Base đi kèm vocab tiếng Anh/Trung. Chạy text tiếng Việt qua đó sẽ ra
+    âm thanh có dao động nhưng vô nghĩa — chữ có dấu bị bỏ hoặc map sai token.
+    """
+    if not vocab.exists():
+        print(f"(!) không thấy vocab: {vocab}")
+        return
+    txt = vocab.read_text(encoding="utf-8", errors="ignore")
+    hit = sum(1 for c in VI_CHARS if c in txt)
+    if hit < len(VI_CHARS) // 2:
+        print(f"(!) VOCAB KHÔNG PHẢI TIẾNG VIỆT — chỉ {hit}/{len(VI_CHARS)} ký tự có dấu.")
+        print("    Model này không đọc được tiếng Việt, output sẽ vô nghĩa.")
+        print("    Cần checkpoint tiếng Việt: --ckpt <file.safetensors> --vocab <vocab.txt>")
+    else:
+        print(f"vocab: {hit}/{len(VI_CHARS)} ký tự tiếng Việt — OK")
+
+
+def build_tts(device: str, ckpt: Path | None, vocab: Path | None):
     from f5_tts.api import F5TTS
     sig = inspect.signature(F5TTS.__init__)
     kw, notes = {}, []
     if "device" in sig.parameters:
         kw["device"] = device
+    # Checkpoint + vocab tiếng Việt. Tên tham số khác nhau giữa các bản nên dò.
+    if ckpt:
+        for name in ("ckpt_file", "ckpt_path", "model_path"):
+            if name in sig.parameters:
+                kw[name] = str(ckpt); notes.append(f"{name}={ckpt.name}"); break
+    if vocab:
+        for name in ("vocab_file", "vocab_path"):
+            if name in sig.parameters:
+                kw[name] = str(vocab); notes.append(f"{name}={vocab.name}"); break
+        check_vocab(vocab)
     # Ép fp32 qua bất kỳ tên tham số nào phiên bản này dùng.
     for name in ("dtype", "torch_dtype", "precision"):
         if name in sig.parameters:
@@ -69,12 +101,14 @@ def main() -> int:
     ap.add_argument("--out-dir", type=Path)
     ap.add_argument("--device", default="cuda" if torch.cuda.is_available() else "cpu")
     ap.add_argument("--force", action="store_true")
+    ap.add_argument("--ckpt", type=Path, help="checkpoint tiếng Việt (.safetensors/.pt)")
+    ap.add_argument("--vocab", type=Path, help="vocab.txt của checkpoint đó")
     a = ap.parse_args()
 
     ref_text = a.ref_text_file.read_text(encoding="utf-8").strip()
     if a.device == "cuda" and torch.cuda.is_available():
         print(f"GPU: {torch.cuda.get_device_name(0)}")
-    tts = build_tts(a.device)
+    tts = build_tts(a.device, a.ckpt, a.vocab)
 
     if a.in_dir:
         out_dir = a.out_dir or (a.in_dir.parent / "audio")
