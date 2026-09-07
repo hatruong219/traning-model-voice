@@ -168,87 +168,37 @@ PYX
   ;;
 
 zeroshot)
-  [ -f data/ref/ref.txt ] || { echo "chưa có ref text — chạy ./run-on-gpu.sh reftext"; exit 1; }
-  D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav)
+  D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav 2>/dev/null) \
+    || { echo "chưa có mẫu — chạy ./run-on-gpu.sh ref rồi reftext"; exit 1; }
   "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
-      echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
-      echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
-      exit 1; }
-  GEN="${2:-Lửa kín cả khung hình, không thấy trời cũng không thấy đất.}"
+      echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, transcript sẽ lệch."
+      echo "    LEN=10 ./run-on-gpu.sh ref && ./run-on-gpu.sh reftext"; exit 1; }
+  [ -f data/ref/ref.txt ] || { echo "chưa có transcript — ./run-on-gpu.sh reftext"; exit 1; }
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
-  ARGS=(--ref_audio data/ref/ref.wav --ref_text "$(cat data/ref/ref.txt)"
-        --gen_text "$GEN" --output_dir data/zeroshot)
-  [ -n "${DEVICE:-}" ] && ARGS+=(--device "$DEVICE")
-  "$VENV/bin/f5-tts_infer-cli" "${ARGS[@]}"
 
-  # Output NaN/Inf được ghi ra thành hằng số full-scale: mean == max == 0.0 dB.
-  # File "đầy" nhưng không dao động nên KHÔNG có tiếng. Phát hiện luôn, đừng để
-  # người dùng tự nghe rồi đoán.
-  W=data/zeroshot/infer_cli_basic.wav
-  if [ -f "$W" ]; then
-      MEAN=$(ffmpeg -hide_banner -i "$W" -af volumedetect -f null - 2>&1 \
-             | grep -oP 'mean_volume: \K[-0-9.]+' | head -1)
-      MAX=$(ffmpeg -hide_banner -i "$W" -af volumedetect -f null - 2>&1 \
-             | grep -oP 'max_volume: \K[-0-9.]+' | head -1)
-      echo
-      echo "output: mean ${MEAN} dB · max ${MAX} dB"
-      if [ "$MEAN" = "0.0" ] && [ "$MAX" = "0.0" ]; then
-          echo
-          echo "(!) OUTPUT HỎNG — waveform là hằng số bão hoà, không có tiếng."
-          echo "    Model trả về NaN/Inf. Gần như luôn do bất ổn số học fp16 trên GPU."
-          echo "    Thử CPU để khoanh vùng:  DEVICE=cpu ./run-on-gpu.sh zeroshot"
-          exit 1
-      fi
-  fi
-  echo "NGHE data/zeroshot/ — ra giọng bạn thì DỪNG, khỏi train."
+  GEN="${2:-Lửa kín cả khung hình, không thấy trời cũng không thấy đất.}"
+  # Qua tts-f5.py thay vì f5-tts_infer-cli: CLI không cho đổi dtype, mà GTX 16xx
+  # cần fp32 (fp16 -> NaN -> waveform hằng số, file đầy nhưng không có tiếng).
+  "$PY" scripts/tts-f5.py --ref data/ref/ref.wav --ref-text-file data/ref/ref.txt \
+      --text "$GEN" --out data/zeroshot/test.wav ${DEVICE:+--device "$DEVICE"} \
+    && { echo; echo "NGHE data/zeroshot/test.wav — ra giọng bạn thì DỪNG, khỏi train."; } \
+    || { echo; echo "(!) chưa ra tiếng. Thử CPU:  DEVICE=cpu ./run-on-gpu.sh zeroshot"; exit 1; }
   ;;
 
 narrate)
-  # Đọc CẢ THƯ MỤC text bằng giọng đã clone. Tên file ra khớp tên file vào:
-  #   tts-lines/S01.txt -> audio/S01.wav
-  # Dùng cho dây chuyền manga-narration; giữ đúng giao diện của tts-edge.py.
-  SRC="${2:?đưa thư mục chứa các file .txt, vd ../manga-narration/.../tts-lines}"
+  SRC="${2:?đưa thư mục chứa các file .txt}"
   OUT="${3:-${SRC%/*}/audio}"
   [ -d "$SRC" ] || { echo "không thấy thư mục: $SRC"; exit 1; }
   [ -f data/ref/ref.wav ] && [ -f data/ref/ref.txt ] \
-    || { echo "chưa có mẫu giọng — chạy ./run-on-gpu.sh ref rồi reftext"; exit 1; }
-  D=$(ffprobe -v error -show_entries format=duration -of csv=p=0 data/ref/ref.wav)
-  "$PY" -c "import sys; sys.exit(0 if float('$D')<=12 else 1)" || {
-      echo "(!) mẫu dài ${D}s — F5-TTS chỉ dùng 12s đầu, phần transcript còn lại sẽ lệch."
-      echo "    Chạy lại:  LEN=10 ./run-on-gpu.sh ref  &&  ./run-on-gpu.sh reftext"
-      exit 1; }
+    || { echo "chưa có mẫu giọng — ./run-on-gpu.sh ref rồi reftext"; exit 1; }
   "$PIP" show f5-tts >/dev/null 2>&1 || "$PIP" install -q f5-tts
-  mkdir -p "$OUT"
 
-  mapfile -d '' TXTS < <(find "$SRC" -maxdepth 1 -name '*.txt' -print0 | sort -z)
-  [ "${#TXTS[@]}" -gt 0 ] || { echo "không thấy file .txt nào trong $SRC"; exit 1; }
-  echo "${#TXTS[@]} đoạn → $OUT"
-
-  REFTXT="$(cat data/ref/ref.txt)"
-  done_n=0; skip_n=0; fail_n=0
-  for t in "${TXTS[@]}"; do
-      b=$(basename "${t%.txt}")
-      # F5-TTS đặt tên output theo nội bộ, nên đọc vào thư mục tạm rồi đổi tên.
-      if [ -s "$OUT/$b.wav" ] && [ "${FORCE:-0}" != "1" ]; then skip_n=$((skip_n+1)); continue; fi
-      tmp=$(mktemp -d)
-      if "$VENV/bin/f5-tts_infer-cli" --ref_audio data/ref/ref.wav \
-             --ref_text "$REFTXT" --gen_text "$(cat "$t")" \
-             --output_dir "$tmp" >/dev/null 2>&1; then
-          w=$(find "$tmp" -name '*.wav' | head -1)
-          if [ -s "$w" ]; then mv "$w" "$OUT/$b.wav"; done_n=$((done_n+1));
-          else echo "  $b: không ra file"; fail_n=$((fail_n+1)); fi
-      else
-          echo "  $b: f5-tts lỗi"; fail_n=$((fail_n+1))
-      fi
-      rm -rf "$tmp"
-      [ $((done_n % 10)) -eq 0 ] && [ "$done_n" -gt 0 ] && echo "  … $done_n đoạn"
-  done
+  "$PY" scripts/tts-f5.py --ref data/ref/ref.wav --ref-text-file data/ref/ref.txt \
+      --in-dir "$SRC" --out-dir "$OUT" ${DEVICE:+--device "$DEVICE"} ${FORCE:+--force}
   echo
-  echo "đọc $done_n · có sẵn $skip_n · lỗi $fail_n → $OUT"
-  [ "$fail_n" -gt 0 ] && echo "(!) chạy lại để đọc tiếp phần lỗi; file đã có sẽ bỏ qua (FORCE=1 để đọc lại hết)"
-  echo "→ tiếp, ở máy có manga-narration:"
-  echo "   python3 scripts/build-video.py <results>"
+  echo "→ gửi $OUT về máy WSL, rồi:"
   echo "   python3 scripts/retime-from-audio.py <results>"
+  echo "   python3 scripts/build-video.py <results>"
   ;;
 
 diag)
