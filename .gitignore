@@ -1,9 +1,9 @@
 # Audio giọng, dataset, checkpoint — nặng và là dữ liệu cá nhân, không đẩy lên repo
 data/raw/
-data/vocals/
+# data/vocals/
 data/dataset/
 data/checkpoints/
-*.wav
+# *.wav
 *.mp3
 *.pt
 *.ckpt
